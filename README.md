@@ -7,7 +7,7 @@ high-DPI OLED laptops: a single ~0.5 MB exe, no Electron or WebView, about 0% CP
 - **VT/xterm emulator.** Supports truecolor, 256 and 16 colors, bold/italic/underline/strike, the alternate screen, scroll regions, DEC line drawing, wide CJK/emoji characters, bracketed paste, SGR mouse reporting, focus events, and DSR/DA replies.
 - **Part of the desktop.** The window is owned by Explorer's desktop window (`Progman`), so Windows keeps it directly above the desktop.
   - It stays below every other window, and stays out of Alt+Tab and the taskbar.
-  - **Show desktop** (Win+D, Win+M, the taskbar's corner button) brings the terminal up together with the desktop instead of hiding it. Pressing Win+D again restores your windows as usual.
+  - **Show desktop** (Win+D, Win+M, the taskbar's corner button) brings the terminal up together with the desktop instead of hiding it, and gives it the keyboard so you can start typing right away. Pressing Win+D again restores your windows as usual.
 - **Click to type.** Click anywhere on the terminal (text, empty space or padding) and it takes the keyboard. Click another window and the terminal goes back to being the wallpaper.
 - **Summon hotkey.** **Alt+`** brings the terminal above all windows. Press it again (or click elsewhere) to send it back.
 - **Always Administrator.** The manifest specifies `requireAdministrator`.

@@ -448,8 +448,8 @@ internal sealed class MainWindow : Window
     }
 
     /// <summary>
-    /// The desktop came forward (Win+D while we were unowned because the mouse rested on us): re-attach so we come up
-    /// with it. Another app took the foreground while we were summoned: go back to being the wallpaper.
+    /// The desktop came forward (Show Desktop, or the last window closed or minimized): re-attach so we come up with it,
+    /// then take the keyboard. Another app took the foreground while we were summoned: go back to being the wallpaper.
     /// </summary>
     private void OnForegroundChanged(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
     {
@@ -457,6 +457,8 @@ internal sealed class MainWindow : Window
         if (IsDesktopWindow(hwnd))
         {
             EndActivation();
+            // Nothing is in front of the wallpaper any more: take the keyboard so typing goes straight to the shell.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, TakeFocusIfDesktopIsForeground);
             return;
         }
         if (!_raised) return;
@@ -466,10 +468,11 @@ internal sealed class MainWindow : Window
 
     private static bool IsDesktopWindow(IntPtr hwnd) => Native.GetClassName(hwnd) is "WorkerW" or "Progman";
 
-    /// <summary>At startup / unlock, take the keyboard if nothing else has it, so typing works immediately.</summary>
+    /// <summary>At startup / unlock / Show Desktop, take the keyboard if nothing else has it, so typing works immediately.</summary>
     private void TakeFocusIfDesktopIsForeground()
     {
         var fg = Native.GetForegroundWindow();
+        if (_locked || fg == _hwnd) return;
         if (fg == IntPtr.Zero || IsDesktopWindow(fg) || Native.GetClassName(fg) == "Shell_TrayWnd")
         {
             BeginActivation();
