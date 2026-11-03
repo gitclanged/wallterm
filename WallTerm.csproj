@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -9,7 +9,7 @@
     <LangVersion>12</LangVersion>
     <RootNamespace>WallTerm</RootNamespace>
     <AssemblyName>WallTerm</AssemblyName>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Product>WallTerm</Product>
     <Description>Live PowerShell terminal as the Windows desktop background.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>

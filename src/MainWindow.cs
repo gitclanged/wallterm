@@ -192,7 +192,7 @@ internal sealed class MainWindow : Window
                 }
             }
         }
-        Native.SetWindowPos(_hwnd, _raised ? Native.HWND_TOP : Native.HWND_BOTTOM, r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top,
+        Native.SetWindowPos(_hwnd, _raised ? Native.HWND_TOP : SlotAboveDesktop(), r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top,
             Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
     }
 
@@ -238,7 +238,21 @@ internal sealed class MainWindow : Window
     }
 
     private void PinToBottom() =>
-        Native.SetWindowPos(_hwnd, Native.HWND_BOTTOM, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        Native.SetWindowPos(_hwnd, SlotAboveDesktop(), 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+
+    /// <summary>
+    /// The hwndInsertAfter that puts us directly above the desktop window: the window currently just above it (or
+    /// ourselves when we are already there), HWND_TOP when the desktop is at the top of its band (Show Desktop).
+    /// </summary>
+    private IntPtr SlotAboveDesktop()
+    {
+        var desktop = _desktop != IntPtr.Zero ? _desktop : Native.FindWindow("Progman", null);
+        if (desktop == IntPtr.Zero) return Native.HWND_BOTTOM;
+        var prev = Native.GetWindow(desktop, Native.GW_HWNDPREV);
+        if (prev == IntPtr.Zero || (Native.GetWindowLongPtr(prev, Native.GWL_EXSTYLE).ToInt64() & Native.WS_EX_TOPMOST) != 0)
+            return Native.HWND_TOP;
+        return prev;
+    }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
@@ -248,9 +262,13 @@ internal sealed class MainWindow : Window
             {
                 var wp = Marshal.PtrToStructure<Native.WINDOWPOS>(lParam);
                 bool modified = false;
-                if (!_raised && (wp.flags & Native.SWP_NOZORDER) == 0 && wp.hwndInsertAfter != Native.HWND_BOTTOM)
+                if (!_raised && (wp.flags & Native.SWP_NOZORDER) == 0)
                 {
-                    wp.hwndInsertAfter = Native.HWND_BOTTOM;
+                    // Not HWND_BOTTOM: that is below the desktop window (owned or not), which then paints the
+                    // wallpaper over us until something re-sorts the z-order — a blank flash on clicks and app switches.
+                    var after = SlotAboveDesktop();
+                    if (after == _hwnd) wp.flags |= Native.SWP_NOZORDER;
+                    else wp.hwndInsertAfter = after;
                     modified = true;
                 }
                 if (!_closing && (wp.flags & Native.SWP_HIDEWINDOW) != 0)
