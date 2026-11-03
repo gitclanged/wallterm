@@ -1,0 +1,13 @@
+bin/
+obj/
+publish/
+.vs/
+*.user
+*.suo
+
+release/
+
+# keys - never commit
+key.txt
+key.txt.pub
+*.pem
