@@ -89,6 +89,12 @@ Inside WallTerm, a `wallterm` command is available in the PowerShell session. Th
 | `wallterm --version` | Print the version |
 | `wallterm help` | Print the built-in help |
 
+### Starting apps
+
+Inside WallTerm, `run <name>` starts any app listed in the Start menu, including Store apps. Examples: `run waterfox`, `run calc`, `run python`. It looks for an exact name first, then a name that starts with what you typed, then one that contains it. If several match, the shortest name wins. Tab completes app names. `run -List [text]` lists the matching app names.
+
+WallTerm runs as Administrator, but apps launched with `run` start through Explorer, so they run without elevation. (The command is `run` because `start` is PowerShell's built-in alias for `Start-Process`.)
+
 ### Settings
 
 | Setting | Values | Default | Example |

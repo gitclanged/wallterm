@@ -17,7 +17,7 @@ internal static class ShellCommand
             // Define a 'wallterm' function in the session so 'wallterm set …' runs synchronously and prints inline
             // (a GUI-subsystem exe would otherwise return to the prompt before its output appears).
             var self = (Environment.ProcessPath ?? "WallTerm.exe").Replace("'", "''");
-            var script = $"function global:wallterm {{ & '{self}' @args | Out-Host }}";
+            var script = $"function global:wallterm {{ & '{self}' @args | Out-Host }}\n{RunFunction}";
             args = $"{args} -NoExit -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}".Trim();
         }
 
@@ -25,6 +25,40 @@ internal static class ShellCommand
         workingDirectory = Directory.Exists(dir) ? dir : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return $"{Elevation.Quote(exe)} {args}".Trim();
     }
+
+    // 'run <app>' starts anything listed in Start (Win32 and Store apps) by name: exact match, then prefix, then
+    // substring, then all words; the shortest name wins. ('start' is taken: it's PowerShell's alias for Start-Process.)
+    // Launching through explorer.exe hands the start to the user's Explorer, so the app runs un-elevated.
+    private const string RunFunction = """
+        function global:Get-WallTermApps {
+            (New-Object -ComObject Shell.Application).NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}').Items() |
+                ForEach-Object { [pscustomobject]@{ Name = $_.Name; Id = $_.Path } } | Sort-Object Name
+        }
+        function global:run {
+            param([Parameter(Position = 0, ValueFromRemainingArguments)][string[]]$Name, [switch]$List)
+            $query = ($Name -join ' ').Trim()
+            $apps = Get-WallTermApps
+            $q = [WildcardPattern]::Escape($query)
+            if ($List -or -not $query) { return ($apps | Where-Object { $_.Name -like "*$q*" }).Name }
+            $words = @($query -split '\s+' | ForEach-Object { [WildcardPattern]::Escape($_) })
+            $match = @($apps | Where-Object Name -eq $query)
+            if (-not $match) { $match = @($apps | Where-Object { $_.Name -like "$q*" }) }
+            if (-not $match) { $match = @($apps | Where-Object { $_.Name -like "*$q*" }) }
+            if (-not $match) { $match = @($apps | Where-Object { $n = $_.Name; -not ($words | Where-Object { $n -notlike "*$_*" }) }) }
+            if (-not $match) { Write-Error "No installed app matches '$query'. List them with: run -List"; return }
+            $app = $match | Sort-Object { $_.Name.Length }, Name | Select-Object -First 1
+            Write-Host "Starting $($app.Name)"
+            explorer.exe "shell:AppsFolder\$($app.Id)"
+        }
+        Register-ArgumentCompleter -CommandName run -ParameterName Name -ScriptBlock {
+            param($cmd, $param, $word)
+            $w = [WildcardPattern]::Escape($word.Trim('''"'))
+            (Get-WallTermApps | Where-Object { $_.Name -like "*$w*" }).Name | ForEach-Object {
+                $text = if ($_ -match '[\s''`$(){}@,;&|]') { "'" + ($_ -replace "'", "''") + "'" } else { $_ }
+                [System.Management.Automation.CompletionResult]::new($text, $_, 'ParameterValue', $_)
+            }
+        }
+        """;
 
     private static bool HasScriptArgument(string args)
     {
