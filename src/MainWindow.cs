@@ -192,8 +192,18 @@ internal sealed class MainWindow : Window
                 }
             }
         }
-        Native.SetWindowPos(_hwnd, _raised ? Native.HWND_TOP : SlotAboveDesktop(), r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top,
+        SetPosInZOrder(_raised ? Native.HWND_TOP : SlotAboveDesktop(), r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top,
             Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+    }
+
+    /// <summary>
+    /// SetWindowPos that tolerates insertAfter being ourselves (already in the slot): Windows silently ignores the whole
+    /// call in that case, size and position included, so drop the z-order change instead.
+    /// </summary>
+    private void SetPosInZOrder(IntPtr insertAfter, int x, int y, int cx, int cy, uint flags)
+    {
+        if (insertAfter == _hwnd) flags |= Native.SWP_NOZORDER;
+        Native.SetWindowPos(_hwnd, insertAfter, x, y, cx, cy, flags);
     }
 
     /// <summary>
@@ -238,7 +248,7 @@ internal sealed class MainWindow : Window
     }
 
     private void PinToBottom() =>
-        Native.SetWindowPos(_hwnd, SlotAboveDesktop(), 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        SetPosInZOrder(SlotAboveDesktop(), 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
 
     /// <summary>
     /// The hwndInsertAfter that puts us directly above the desktop window: the window currently just above it (or
