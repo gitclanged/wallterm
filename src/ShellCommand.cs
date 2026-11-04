@@ -17,7 +17,7 @@ internal static class ShellCommand
             // Define a 'wallterm' function in the session so 'wallterm set …' runs synchronously and prints inline
             // (a GUI-subsystem exe would otherwise return to the prompt before its output appears).
             var self = (Environment.ProcessPath ?? "WallTerm.exe").Replace("'", "''");
-            var script = $"function global:wallterm {{ & '{self}' @args | Out-Host }}\n{RunFunction}";
+            var script = WalltermFunction.Replace("{self}", self) + "\n" + RunFunction;
             args = $"{args} -NoExit -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}".Trim();
         }
 
@@ -25,6 +25,22 @@ internal static class ShellCommand
         workingDirectory = Directory.Exists(dir) ? dir : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return $"{Elevation.Quote(exe)} {args}".Trim();
     }
+
+    // 'wallterm settings' runs the editor right here in the terminal (the exe only resolves which one), then checks
+    // the saved file so mistakes show up as soon as the editor closes.
+    private const string WalltermFunction = """
+        function global:wallterm {
+            if ($args.Count -eq 1 -and "$($args[0])" -in 'settings', 'config', 'edit') {
+                # Piped, or PowerShell neither waits for a GUI-subsystem exe nor captures its output.
+                $cmd = @(& '{self}' settings --resolve | ForEach-Object { $_ })
+                if ($LASTEXITCODE -ne 0 -or $cmd.Count -lt 2) { $cmd | Out-Host; return }
+                & $cmd[0] @($cmd | Select-Object -Skip 1)
+                & '{self}' check | Out-Host
+                return
+            }
+            & '{self}' @args | Out-Host
+        }
+        """;
 
     // 'run <app>' starts anything listed in Start (Win32 and Store apps) by name: exact match, then prefix, then
     // substring, then all words; the shortest name wins. ('start' is taken: it's PowerShell's alias for Start-Process.)
@@ -88,7 +104,7 @@ internal static class ShellCommand
         return null;
     }
 
-    private static string? Find(string file)
+    internal static string? Find(string file)
     {
         if (Path.IsPathRooted(file)) return File.Exists(file) ? file : null;
         var withExt = Path.HasExtension(file) ? file : file + ".exe";

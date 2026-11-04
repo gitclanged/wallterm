@@ -22,4 +22,4 @@ turns run-at-startup off again.
 Requires the .NET Desktop Runtime 8 or newer:
   https://dotnet.microsoft.com/download/dotnet/8.0
 
-Settings: %USERPROFILE%\.config\wallterm\config.json, or `wallterm help`. Full manual: MANUAL.md
+Settings: run `wallterm settings` (edits %USERPROFILE%\.config\wallterm\config.ini), or `wallterm help`. Full manual: MANUAL.md

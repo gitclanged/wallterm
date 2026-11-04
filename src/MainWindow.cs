@@ -24,7 +24,11 @@ internal sealed class MainWindow : Window
     private readonly TerminalView _view;
     private readonly BurnInGuard _burnIn;
     private readonly ConfigWatcher _watcher;
-    private readonly Native.WinEventProc _winEventProc;
+    private readonly Native.WinEventProc _winEventProc, _layoutEventProc;
+    private readonly List<IntPtr> _layoutHooks = new();
+    private readonly DispatcherTimer _layoutTimer;
+    private string _avoid = "Off";
+    private bool _moveSizing;
     private ConPty? _pty;
     private bool _shellExited;
     private string _hotkey = "";
@@ -64,6 +68,14 @@ internal sealed class MainWindow : Window
         Content = _view;
         _burnIn = new BurnInGuard(_view);
         _winEventProc = OnForegroundChanged;
+        _layoutEventProc = OnWindowLayoutEvent;
+        // Windows move in bursts (snapping animates, Snap layouts place several at once): settle before re-laying out.
+        _layoutTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(150) };
+        _layoutTimer.Tick += (_, _) =>
+        {
+            _layoutTimer.Stop();
+            FitToMonitor();
+        };
 
         ApplyConfig(config);
 
@@ -113,6 +125,7 @@ internal sealed class MainWindow : Window
         {
             ApplyBackdrop();
             RegisterHotkey();
+            ApplyAvoidWindows();
         }
     }
 
@@ -166,10 +179,14 @@ internal sealed class MainWindow : Window
         Native.WTSRegisterSessionNotification(_hwnd, 0);
         _winEventHook = Native.SetWinEventHook(Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero,
             _winEventProc, 0, 0, Native.WINEVENT_OUTOFCONTEXT | Native.WINEVENT_SKIPOWNPROCESS);
+        ApplyAvoidWindows();
         FitToMonitor();
     }
 
-    /// <summary>Covers the primary monitor's work area (the whole screen with an auto-hidden taskbar).</summary>
+    /// <summary>
+    /// Covers the primary monitor's work area (the whole screen with an auto-hidden taskbar), minus the windows that
+    /// <see cref="WallTermConfig.AvoidWindows"/> keeps us clear of.
+    /// </summary>
     private void FitToMonitor()
     {
         if (_hwnd == IntPtr.Zero) return;
@@ -192,8 +209,66 @@ internal sealed class MainWindow : Window
                 }
             }
         }
+        r = FreeArea.Compute(r, _avoid, _hwnd, _desktop != IntPtr.Zero ? _desktop : Native.FindWindow("Progman", null));
         SetPosInZOrder(_raised ? Native.HWND_TOP : SlotAboveDesktop(), r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top,
             Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+    }
+
+    // ───────────── Making room for other windows ─────────────
+
+    /// <summary>Watches other windows move, snap, minimize, open and close only while there is something to avoid.</summary>
+    private void ApplyAvoidWindows()
+    {
+        if (_avoid == _config.AvoidWindows) return;
+        _avoid = _config.AvoidWindows;
+        foreach (var hook in _layoutHooks) Native.UnhookWinEvent(hook);
+        _layoutHooks.Clear();
+        if (_avoid != "Off")
+        {
+            (uint Min, uint Max)[] ranges =
+            [
+                (Native.EVENT_SYSTEM_MOVESIZESTART, Native.EVENT_SYSTEM_MOVESIZEEND),
+                (Native.EVENT_SYSTEM_MINIMIZESTART, Native.EVENT_SYSTEM_MINIMIZEEND),
+                (Native.EVENT_OBJECT_DESTROY, Native.EVENT_OBJECT_HIDE),
+                (Native.EVENT_OBJECT_LOCATIONCHANGE, Native.EVENT_OBJECT_LOCATIONCHANGE),
+                (Native.EVENT_OBJECT_CLOAKED, Native.EVENT_OBJECT_UNCLOAKED),
+            ];
+            foreach (var (min, max) in ranges)
+            {
+                var hook = Native.SetWinEventHook(min, max, IntPtr.Zero, _layoutEventProc, 0, 0,
+                    Native.WINEVENT_OUTOFCONTEXT | Native.WINEVENT_SKIPOWNPROCESS);
+                if (hook != IntPtr.Zero) _layoutHooks.Add(hook);
+            }
+        }
+        FitToMonitor();
+    }
+
+    private void OnWindowLayoutEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
+    {
+        // Only top-level windows themselves (not their controls, carets or scrollbars).
+        if (idObject != Native.OBJID_WINDOW || idChild != Native.CHILDID_SELF || hwnd == IntPtr.Zero) return;
+        if (evt != Native.EVENT_OBJECT_DESTROY && Native.GetAncestor(hwnd, Native.GA_ROOT) != hwnd) return;
+        switch (evt)
+        {
+            case Native.EVENT_SYSTEM_MOVESIZESTART:
+                // Dragging: wait for the drop rather than chase the window around.
+                _moveSizing = true;
+                _layoutTimer.Stop();
+                return;
+            case Native.EVENT_SYSTEM_MOVESIZEEND:
+                _moveSizing = false;
+                break;
+            case Native.EVENT_OBJECT_LOCATIONCHANGE when _moveSizing:
+                return;
+        }
+        ScheduleLayout();
+    }
+
+    private void ScheduleLayout()
+    {
+        if (_avoid == "Off") return;
+        _layoutTimer.Stop();
+        _layoutTimer.Start();
     }
 
     /// <summary>
@@ -454,6 +529,7 @@ internal sealed class MainWindow : Window
     private void OnForegroundChanged(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
     {
         if (hwnd == IntPtr.Zero || hwnd == _hwnd) return;
+        ScheduleLayout(); // the z-order changed: Show Desktop, or a window came up over / went below another
         if (IsDesktopWindow(hwnd))
         {
             EndActivation();
@@ -578,6 +654,8 @@ internal sealed class MainWindow : Window
     {
         _watcher.Dispose();
         if (_winEventHook != IntPtr.Zero) Native.UnhookWinEvent(_winEventHook);
+        foreach (var hook in _layoutHooks) Native.UnhookWinEvent(hook);
+        _layoutTimer.Stop();
         if (_powerNotify != IntPtr.Zero) Native.UnregisterPowerSettingNotification(_powerNotify);
         Native.WTSUnRegisterSessionNotification(_hwnd);
         Native.UnregisterHotKey(_hwnd, HotkeyId);

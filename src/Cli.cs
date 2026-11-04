@@ -5,7 +5,7 @@ namespace WallTerm;
 
 /// <summary>
 /// Command-line interface. Runs from any shell (including the one inside WallTerm); config changes are written to
-/// config.json and the running instance hot-reloads them via its file watcher.
+/// config.ini and the running instance hot-reloads them via its file watcher.
 /// </summary>
 internal static class Cli
 {
@@ -14,10 +14,12 @@ internal static class Cli
 
         Usage:
           wallterm                          Start (or summon the running instance)
+          wallterm settings                 Edit config.ini in a terminal text editor (every setting is documented there)
           wallterm set <key> <value>        Change a setting; the running terminal reloads it live
           wallterm set color <name> <#hex>  Change a color (background, foreground, cursor, selection, red, brightblue, 0-15 …)
-          wallterm get [key]                Show the current config (or one key)
-          wallterm reset                    Restore default settings
+          wallterm get [key]                Show the config file (or one key)
+          wallterm check                    Report mistakes in config.ini
+          wallterm reset                    Restore default settings (rewrites config.ini)
           wallterm path                     Print the config file path
           wallterm quit                     Close the running instance
           wallterm --install-startup        Start elevated at every logon (Task Scheduler, no UAC prompt)
@@ -29,13 +31,14 @@ internal static class Cli
           padding <all | h,v | l,t,r,b>                 cursor <block|beam|underline>   blink <true|false>
           wiggle <true|false>    wiggle-min <seconds>   wiggle-max <seconds>    wiggle-pixels <1..8>
           scrollback <lines>     shell <exe>            args <arguments>        dir <start directory>
-          hotkey <e.g. Alt+` | Ctrl+Alt+T | none>
+          hotkey <e.g. Alt+` | Ctrl+Alt+T | none>       avoid <snapped|all|off>         editor <auto | program>
 
         Examples:
           wallterm set font "JetBrains Mono"
           wallterm set size 15
           wallterm set opacity 0.85
           wallterm set wiggle true
+          wallterm set avoid all                 (also make room for floating windows)
           wallterm set color background 000000   (in PowerShell, quote a leading #: '#000000')
         """;
 
@@ -59,8 +62,12 @@ internal static class Cli
             case "set":
                 return Set(args.Skip(1).ToArray());
             case "reset":
-                ConfigStore.Save(new WallTermConfig().Normalize());
+                ConfigStore.Reset();
                 return Print($"Defaults restored ({ConfigStore.FilePath}).");
+            case "settings": case "config": case "edit":
+                return Settings(args.Skip(1).ToArray());
+            case "check":
+                return Check();
             case "quit": case "exit": case "stop":
                 return Quit();
             case "install-startup":
@@ -88,10 +95,37 @@ internal static class Cli
         return Print("WallTerm closed.");
     }
 
+    /// <summary>
+    /// Opens config.ini in an editor. "--resolve" (used by the injected 'wallterm' function, which runs the editor in
+    /// its own terminal) prints the editor command line instead, one argument per line, the file last.
+    /// </summary>
+    private static int Settings(string[] args)
+    {
+        var config = ConfigStore.LoadOrCreate();
+        if (!File.Exists(ConfigStore.FilePath)) return Fail($"could not create {ConfigStore.FilePath}.");
+        if (args is ["--resolve"])
+        {
+            var (exe, editorArgs) = EditorCommand.Resolve(config);
+            return Print(string.Join("\n", editorArgs.Prepend(exe).Append(ConfigStore.FilePath)));
+        }
+        if (args.Length > 0) return Fail("usage: wallterm settings");
+        try { return Print(EditorCommand.OpenInNewWindow(config)); }
+        catch (Exception ex) { return Fail($"could not start the editor: {ex.Message}. Set one with: wallterm set editor <program>"); }
+    }
+
+    private static int Check()
+    {
+        if (!ConfigStore.TryLoad(out _, out var error, out var warnings))
+            return Fail($"{ConfigStore.FilePath}: {error}");
+        if (warnings.Count == 0) return Print("Settings OK.");
+        return Fail($"{ConfigStore.FileName} has problems (these use their defaults):\n  " + string.Join("\n  ", warnings));
+    }
+
     private static int Get(string[] args)
     {
         var config = ConfigStore.LoadOrCreate();
-        if (args.Length == 0) return Print(ConfigStore.ToJson(config));
+        if (args.Length == 0)
+            return File.Exists(ConfigStore.FilePath) ? Print(File.ReadAllText(ConfigStore.FilePath).TrimEnd()) : Print(IniConfig.Update(null, config));
         var key = string.Join(' ', args).Trim().ToLowerInvariant();
         string? value = key switch
         {
@@ -111,6 +145,8 @@ internal static class Cli
             "args" or "shellargs" => config.ShellArgs,
             "dir" or "startdirectory" => config.StartDirectory,
             "hotkey" => config.Hotkey,
+            "avoid" or "avoidwindows" => config.AvoidWindows,
+            "editor" => config.Editor.Length == 0 ? "auto" : config.Editor,
             "color background" or "background" or "backgroundcolor" => config.BackgroundColor,
             _ when key.StartsWith("color ", StringComparison.Ordinal) =>
                 ColorKey(key[6..].Trim()) is { } ck && config.Colors.TryGetValue(ck, out var cv) ? cv : null,
@@ -254,6 +290,26 @@ internal static class Cli
                     return $"'{value}' is not a valid hotkey (examples: Alt+`, Ctrl+Alt+T, Win+F12, none).";
                 c.Hotkey = value;
                 applied = $"hotkey = {value}";
+                return null;
+
+            case "avoid": case "avoidwindows":
+            {
+                var v = value.Trim().ToLowerInvariant() switch
+                {
+                    "none" or "false" or "no" or "0" => "Off",
+                    "true" or "yes" or "1" or "snap" => "Snapped",
+                    "floating" or "windows" => "All",
+                    _ => value,
+                };
+                if (!OneOf(v, out var avoid, "Off", "Snapped", "All")) return "avoid must be snapped, all or off.";
+                c.AvoidWindows = avoid;
+                applied = $"avoid = {avoid}";
+                return null;
+            }
+
+            case "editor":
+                c.Editor = value.Equals("auto", StringComparison.OrdinalIgnoreCase) ? "" : value;
+                applied = $"editor = {(c.Editor.Length == 0 ? "auto" : c.Editor)}";
                 return null;
 
             case "background": case "backgroundcolor":

@@ -1,5 +1,4 @@
 ﻿using System.Globalization;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using WallTerm.Vt;
@@ -39,6 +38,10 @@ public sealed class WallTermConfig
     public string StartDirectory { get; set; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     /// <summary>Global summon/dismiss hotkey, e.g. "Alt+`", "Ctrl+Alt+T", or "None".</summary>
     public string Hotkey { get; set; } = "Alt+`";
+    /// <summary>Off, Snapped or All: which windows the terminal shrinks to stay clear of.</summary>
+    public string AvoidWindows { get; set; } = "Snapped";
+    /// <summary>Editor for 'wallterm settings'; empty or "auto" picks one (see <see cref="EditorCommand"/>).</summary>
+    public string Editor { get; set; } = "";
     public Dictionary<string, string> Colors { get; set; } = DefaultColors();
 
     public static readonly string[] AnsiNames =
@@ -93,6 +96,8 @@ public sealed class WallTermConfig
         ShellArgs ??= "";
         if (string.IsNullOrWhiteSpace(StartDirectory)) StartDirectory = defaults.StartDirectory;
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "None";
+        AvoidWindows = NormalizeChoice(AvoidWindows, ["Off", "Snapped", "All"], "Snapped");
+        Editor = Editor?.Trim() ?? "";
 
         var colors = DefaultColors();
         if (Colors != null)
@@ -185,23 +190,23 @@ internal sealed class Theme
     };
 }
 
-/// <summary>Loads, saves and watches %USERPROFILE%\.config\wallterm\config.json.</summary>
+/// <summary>Loads, saves and watches %USERPROFILE%\.config\wallterm\config.ini (see <see cref="IniConfig"/>).</summary>
 internal static class ConfigStore
 {
-    // Relaxed escaping keeps values like "Alt+`" readable in the file instead of +`.
+    // Only used to migrate the config.json of WallTerm 1.1 and earlier.
     private static readonly ConfigJsonContext Json = new(new JsonSerializerOptions
     {
-        WriteIndented = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
         PropertyNameCaseInsensitive = true,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     });
 
     public static string DirectoryPath { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "wallterm");
 
-    public static string FilePath { get; } = Path.Combine(DirectoryPath, "config.json");
+    public const string FileName = "config.ini";
+    public static string FilePath { get; } = Path.Combine(DirectoryPath, FileName);
+    private static string LegacyJsonPath => Path.Combine(DirectoryPath, "config.json");
 
     public static WallTermConfig LoadOrCreate()
     {
@@ -212,45 +217,70 @@ internal static class ConfigStore
             try { Save(config); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             return config;
         }
-        return new WallTermConfig().Normalize(); // file exists but is invalid: run with defaults, never overwrite the user's file
+        return new WallTermConfig().Normalize(); // file exists but can't be read: run with defaults, never overwrite the user's file
     }
 
-    public static bool TryLoad(out WallTermConfig config, out string? error)
+    /// <summary>
+    /// Reads config.ini. Invalid values fall back to their defaults and are listed in <paramref name="warnings"/>;
+    /// false only when the file is missing or can't be read.
+    /// </summary>
+    public static bool TryLoad(out WallTermConfig config, out string? error) => TryLoad(out config, out error, out _);
+
+    public static bool TryLoad(out WallTermConfig config, out string? error, out List<string> warnings)
     {
         config = new WallTermConfig();
         error = null;
+        warnings = [];
         try
         {
+            MigrateLegacyJson();
             if (!File.Exists(FilePath)) { error = "config file does not exist"; return false; }
-            var json = File.ReadAllText(FilePath);
-            config = (JsonSerializer.Deserialize(json, Json.WallTermConfig) ?? new WallTermConfig()).Normalize();
+            config = IniConfig.Parse(File.ReadAllLines(FilePath), warnings).Normalize();
             return true;
-        }
-        catch (JsonException ex)
-        {
-            error = $"invalid JSON: {ex.Message}";
-            return false;
         }
         catch (IOException ex)
         {
             error = ex.Message;
             return false;
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
-    /// <summary>Atomic save (write temp + rename) so the watcher never observes a half-written file.</summary>
-    public static void Save(WallTermConfig config)
+    /// <summary>
+    /// Writes the settings into config.ini, changing only the values that differ so the user's own comments and layout
+    /// survive. Atomic (write temp + rename) so the watcher never observes a half-written file.
+    /// </summary>
+    public static void Save(WallTermConfig config) =>
+        Write(IniConfig.Update(File.Exists(FilePath) ? File.ReadAllLines(FilePath) : null, config));
+
+    /// <summary>Replaces config.ini with a freshly commented file.</summary>
+    public static void Reset() => Write(IniConfig.Update(null, new WallTermConfig().Normalize()));
+
+    private static void Write(string text)
     {
         Directory.CreateDirectory(DirectoryPath);
         var tmp = FilePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(config, Json.WallTermConfig));
+        File.WriteAllText(tmp, text);
         File.Move(tmp, FilePath, overwrite: true);
     }
 
-    public static string ToJson(WallTermConfig config) => JsonSerializer.Serialize(config, Json.WallTermConfig);
+    /// <summary>First run after upgrading from config.json: carry the settings over and keep the old file as .bak.</summary>
+    private static void MigrateLegacyJson()
+    {
+        if (File.Exists(FilePath) || !File.Exists(LegacyJsonPath)) return;
+        WallTermConfig config;
+        try { config = (JsonSerializer.Deserialize(File.ReadAllText(LegacyJsonPath), Json.WallTermConfig) ?? new WallTermConfig()).Normalize(); }
+        catch (JsonException) { return; } // unreadable: leave it alone, a default config.ini gets created instead
+        Save(config);
+        File.Move(LegacyJsonPath, LegacyJsonPath + ".bak", overwrite: true);
+    }
 }
 
-/// <summary>Raises <see cref="Changed"/> (on a thread-pool thread) after config.json is modified. Event-driven, debounced.</summary>
+/// <summary>Raises <see cref="Changed"/> (on a thread-pool thread) after config.ini is modified. Event-driven, debounced.</summary>
 internal sealed class ConfigWatcher : IDisposable
 {
     private readonly FileSystemWatcher _watcher;
@@ -276,7 +306,7 @@ internal sealed class ConfigWatcher : IDisposable
 
     private void OnFsEvent(object sender, FileSystemEventArgs e)
     {
-        if (!string.Equals(e.Name, "config.json", StringComparison.OrdinalIgnoreCase)) return;
+        if (!string.Equals(e.Name, ConfigStore.FileName, StringComparison.OrdinalIgnoreCase)) return;
         _retries = 0;
         _debounce.Change(120, Timeout.Infinite);
     }

@@ -16,7 +16,8 @@ high-DPI OLED laptops: a single ~0.5 MB exe, no Electron or WebView, about 0% CP
   - Cursor blinking stops when unfocused, when the display is off, and when the session is locked.
   - EcoQoS throttling applies while WallTerm is in the background.
   - Optional burn-in "wiggle" shifts the text a few pixels every few minutes.
-- **Live config.** Run `wallterm set …` or edit `%USERPROFILE%\.config\wallterm\config.json`. Changes apply immediately, without restarting.
+- **Makes room for your windows.** Snap a window to half or a quarter of the screen and the terminal shrinks into the free part, with the shell re-wrapping its text to fit. It grows back when the window is closed, minimized or moved away. Set `avoid all` to also make room for floating windows.
+- **Live config.** Run `wallterm settings` to edit the commented `config.ini` in a terminal editor, or change one value with `wallterm set …`. Changes apply as soon as the file is saved, without restarting.
 
 ## Build
 
@@ -68,7 +69,7 @@ If the shell exits, press Enter to start a new session.
 
 ## Settings commands
 
-Inside WallTerm, a `wallterm` command is available in the PowerShell session. The exe accepts the same commands from any other shell. Every `set` is saved to `config.json`, and the running terminal applies it immediately. The exceptions are `shell`, `args` and `dir`, which apply to the next shell session.
+Inside WallTerm, a `wallterm` command is available in the PowerShell session. The exe accepts the same commands from any other shell. Every `set` is saved to `config.ini`, and the running terminal applies it immediately. The exceptions are `shell`, `args` and `dir`, which apply to the next shell session.
 
 > **PowerShell and `#`:** an unquoted `#` starts a comment, so `wallterm set color background #000000` arrives without the color. Write `'#000000'` in quotes, or leave the `#` off: `wallterm set color background 000000`.
 
@@ -77,11 +78,13 @@ Inside WallTerm, a `wallterm` command is available in the PowerShell session. Th
 | Command | What it does |
 |---|---|
 | `wallterm` | Start WallTerm, or summon the running instance |
+| `wallterm settings` | Open `config.ini` in a terminal text editor; reports any mistakes when you exit |
 | `wallterm set <key> <value>` | Change a setting (keys below) |
 | `wallterm set color <name> <hex>` | Change a color (names below) |
-| `wallterm get` | Print the whole config as JSON |
+| `wallterm get` | Print `config.ini` |
 | `wallterm get <key>` | Print one setting, e.g. `wallterm get font` or `wallterm get color red` |
-| `wallterm reset` | Restore all default settings |
+| `wallterm check` | Report invalid values and unknown keys in `config.ini` |
+| `wallterm reset` | Restore all default settings (rewrites `config.ini`) |
 | `wallterm path` | Print the config file path |
 | `wallterm quit` | Close the running instance (also `exit`, `stop`) |
 | `wallterm --install-startup` | Start elevated at every sign-in |
@@ -115,6 +118,8 @@ WallTerm runs as Administrator, but apps launched with `run` start through Explo
 | `args` | Arguments for the shell | `-NoLogo` | `wallterm set args "-NoLogo -NoProfile"` |
 | `dir` | Start directory | `%USERPROFILE%` | `wallterm set dir C:\Code` |
 | `hotkey` | Modifier(s) + key, or `none` | ``Alt+` `` | `wallterm set hotkey Ctrl+Alt+T` |
+| `avoid` | `snapped` (windows touching the screen edges), `all` (floating windows too), `off` | `snapped` | `wallterm set avoid all` |
+| `editor` | Editor for `wallterm settings`: `auto`, or a program name/path with arguments | `auto` (`$env:EDITOR`, then `edit`, `nvim`, `vim`, `nano`, Notepad) | `wallterm set editor nvim` |
 | `background` | Shortcut for `color background` | `#000000` | `wallterm set background 000000` |
 
 The `true`/`false` settings also accept `on`/`off`, `yes`/`no`, `1`/`0` and `enable`/`disable`. `wiggle` also answers to `burnin` and `oled`.
@@ -159,32 +164,30 @@ wallterm get color red
 
 On OLED, an opaque pure-black background draws the least power: `wallterm set opacity 1`. Mica and Acrylic look good, but Windows shows them only while the window is focused, and they cost some GPU time.
 
-## config.json
+## config.ini
 
-`wallterm set` edits this file for you; you can also edit it by hand, and changes apply as soon as it is saved.
+`%USERPROFILE%\.config\wallterm\config.ini` holds every setting, grouped into sections. Each section starts with a short description and the values it accepts. `wallterm settings` opens it in a terminal editor (Microsoft Edit, which ships with Windows 11, unless `$env:EDITOR` or the `editor` setting says otherwise). Changes apply as soon as the file is saved. A missing or invalid value uses its default, and `wallterm check` lists any mistakes. `wallterm set` only rewrites the values it changes, so your own comments stay. An existing `config.json` from WallTerm 1.1 is converted on first start and kept as `config.json.bak`.
 
-```jsonc
-{
-  "FontFamily": "Cascadia Mono",
-  "FontSize": 14,
-  "Padding": { "Left": 48, "Top": 48, "Right": 48, "Bottom": 48 },
-  "BackgroundColor": "#000000",       // #RRGGBB or #AARRGGBB
-  "Opacity": 0.85,
-  "BackdropEffect": "None",           // None | Acrylic | Mica
-  "CursorStyle": "Block",             // Block | Beam | Underline
-  "CursorBlink": true,
-  "Wiggle": false,
-  "WiggleMinSeconds": 180,
-  "WiggleMaxSeconds": 300,
-  "WigglePixels": 3,
-  "Scrollback": 5000,
-  "Shell": "pwsh.exe",
-  "ShellArgs": "-NoLogo",
-  "StartDirectory": "C:\\Users\\you",
-  "Hotkey": "Alt+`",
-  "Colors": { "Foreground": "#D8DAE3", "Cursor": "#F2F3F7", "Selection": "#663D4F7A", "Black": "#1C1D24", "...": "..." }
-}
+```ini
+; Keep the terminal out from under other windows: it shrinks to the largest free part of the screen and the
+; shell re-wraps its text to fit.
+;   Avoid    Snapped  windows snapped to the screen edges (halves, quarters, Snap layouts)
+;            All      snapped and floating windows
+;            Off      always cover the whole screen
+[Layout]
+Avoid = Snapped
 ```
+
+Sections: `[Font]` (Family, Size), `[Window]` (Opacity, Backdrop, Padding, Hotkey), `[Layout]` (Avoid), `[Cursor]` (Style, Blink), `[Colors]` (Background, Foreground, Cursor, Selection, Black … BrightWhite), `[Shell]` (Program, Arguments, StartDirectory, Scrollback, Editor), `[BurnIn]` (Wiggle, MinSeconds, MaxSeconds, Pixels).
+
+## Making room for other windows
+
+The terminal grid is rectangular, so WallTerm resizes itself to the largest rectangle of the work area that no avoided window overlaps, and ConPTY re-wraps the shell's text to the new width.
+
+- **Snapped** windows are those that span the full height or width of the screen or sit in one of its corners (Snap, Snap layouts, tiling tools). Maximized windows are ignored: they hide the desktop anyway.
+- If only slivers are left (for example two windows snapped side by side), the terminal covers the whole screen instead.
+- Windows hidden behind the desktop (Show Desktop) don't count, so Win+D brings the terminal up at full size.
+- WallTerm only watches window events while `avoid` is not `off`, and it waits for a drag to end before re-laying out.
 
 WallTerm logs errors that would otherwise crash it to `%USERPROFILE%\.config\wallterm\wallterm.log` and keeps running.
 
@@ -208,6 +211,9 @@ app.manifest               requireAdministrator, PerMonitorV2 DPI
 src/Program.cs             entry point: CLI dispatch, elevation, single instance, summon/quit events
 src/Cli.cs                 wallterm set/get/reset/quit/… and console output for a GUI-subsystem exe
 src/Config.cs              config model, validation, theme, atomic save, debounced FileSystemWatcher
+src/IniConfig.cs           config.ini sections, help text, parsing and comment-preserving updates
+src/EditorCommand.cs       editor choice for 'wallterm settings'
+src/FreeArea.cs            which windows to avoid, largest free rectangle
 src/Elevation.cs           admin check and runas relaunch
 src/StartupTask.cs         Task Scheduler logon task (install/uninstall)
 src/ConPty.cs              pseudo console, process spawn, blocking-read output thread, exit wait
